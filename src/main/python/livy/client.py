@@ -18,16 +18,18 @@
 from __future__ import absolute_import
 
 import base64
-import cloudpickle
 import os
 import re
-import requests
 import threading
 import traceback
-from configparser import ConfigParser
 from concurrent.futures import ThreadPoolExecutor
+from configparser import ConfigParser
+from io import StringIO, open
+
+import cloudpickle
+import requests
 from future.moves.urllib.parse import ParseResult, urlparse
-from io import open, StringIO
+
 from livy.job_handle import JobHandle
 
 

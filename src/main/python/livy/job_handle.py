@@ -16,12 +16,13 @@
 # limitations under the License.
 #
 import base64
-import cloudpickle
 import sys
 import threading
 import traceback
 from concurrent.futures import Future
 from threading import Timer
+
+import cloudpickle
 
 # Possible job states.
 PENDING = 'PENDING'
