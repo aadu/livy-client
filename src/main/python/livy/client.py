@@ -72,19 +72,21 @@ class HttpClient(object):
         uri = urlparse(url)
         self._config = ConfigParser()
         self._load_config(load_defaults, conf_dict)
+        self._verify_ssl = self._config.getboolean(
+            self._CONFIG_SECTION, 'verify-ssl', fallback=True)
         match = re.match(r'(.*)/sessions/([0-9]+)', uri.path)
         if match:
             base = ParseResult(scheme=uri.scheme, netloc=uri.netloc,
                 path=match.group(1), params=uri.params, query=uri.query,
                 fragment=uri.fragment)
             self._set_uri(base)
-            self._conn = _LivyConnection(base)
+            self._conn = _LivyConnection(base, self._verify_ssl)
             self._session_id = int(match.group(2))
             self._reconnect_to_existing_session()
         else:
             self._set_uri(uri)
             session_conf_dict = dict(self._config.items(self._CONFIG_SECTION))
-            self._conn = _LivyConnection(uri)
+            self._conn = _LivyConnection(uri, self._verify_ssl)
             self._session_id = self._create_new_session(
                 session_conf_dict).json()['id']
         self._executor = ThreadPoolExecutor(max_workers=1)
@@ -436,10 +438,11 @@ class _LivyConnection(object):
         'Accept': 'application/json',
     }
 
-    def __init__(self, uri):
+    def __init__(self, uri, verify_ssl=True):
         self._server_url_prefix = uri.geturl() + self._SESSIONS_URI
         self._requests = requests
         self.lock = threading.Lock()
+        self._verify_ssl = verify_ssl
 
     def send_request(
         self,
@@ -485,7 +488,7 @@ class _LivyConnection(object):
                 request_url = self._server_url_prefix + suffix_url
                 return self._requests.request(method, request_url,
                     timeout=self._TIMEOUT, headers=local_headers, files=files,
-                    json=data)
+                    json=data, verify=self._verify_ssl)
         finally:
             if files is not None:
                 files.clear()
