@@ -22,6 +22,7 @@ import os
 import re
 import threading
 import traceback
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from configparser import ConfigParser
 from io import StringIO, open
@@ -342,9 +343,14 @@ class HttpClient(object):
                     raise Exception(traceback.format_exc())
                 self._stopped = True
 
+    @property
+    def session_uri(self):
+        return self._conn._server_url_prefix + '/' + str(self._session_id)
+
     def _set_uri(self, uri):
         if uri is not None and uri.scheme in ('http', 'https'):
             self._config.set(self._CONFIG_SECTION, 'livy.uri', uri.geturl())
+            return uri.geturl()
         else:
             url_exception = uri.geturl if uri is not None else None
             raise ValueError('Cannot create client - Uri not supported - ',
@@ -480,6 +486,8 @@ class _LivyConnection(object):
            A future to monitor the status of the job
 
         """
+        if not self._verify_ssl:
+            requests.packages.urllib3.disable_warnings()
         try:
             with self.lock:
                 local_headers = {'X-Requested-By': 'livy'}

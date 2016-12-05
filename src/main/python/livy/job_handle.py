@@ -33,6 +33,10 @@ SENT = 'SENT'
 QUEUED = 'QUEUED'
 
 
+class ServerError(Exception):
+    pass
+
+
 class JobHandle(Future):
 
     """A child class of concurrent.futures.Future. Allows for monitoring and
@@ -171,15 +175,20 @@ class JobHandle(Future):
                     str(self._job_id)
                 job_status = self._conn.send_request('GET', suffix_url,
                     headers={'Accept': 'application/json'}).json()
-                job_state = job_status['state']
                 job_result = None
                 has_finished = False
                 job_error = None
+                if isinstance(job_status, dict):
+                    job_state = job_status['state']
+                else:
+                    job_state = 'SERVER_ERROR'
+                    has_finished = True
+                    job_error = ServerError(job_status)
                 if job_state == 'SUCCEEDED':
                     job_result = job_status['result']
                     has_finished = True
                 elif job_state == 'FAILED':
-                    job_error = job_status['error']
+                    job_error = Exception(job_status['error'])
                     has_finished = True
                 elif job_state == 'CANCELLED':
                     repeated_timer.stop()
@@ -193,7 +202,7 @@ class JobHandle(Future):
                             b64_decoded_decoded)
                         super(JobHandle, self).set_result(deserialized_object)
                     if job_error is not None:
-                        self.set_job_exception(Exception(job_error))
+                        self.set_job_exception(job_error)
                     repeated_timer.stop()
                 else:
                     self._update_state(job_state)
