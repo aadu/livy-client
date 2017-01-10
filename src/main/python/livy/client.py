@@ -23,14 +23,13 @@ import re
 import threading
 import traceback
 import warnings
-from concurrent.futures import ThreadPoolExecutor
 from configparser import ConfigParser
 from io import StringIO, open
 
 import cloudpickle
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from future.moves.urllib.parse import ParseResult, urlparse
-
 from livy.job_handle import JobHandle
 
 
@@ -70,6 +69,8 @@ class HttpClient(object):
     _LIVY_CLIENT_CONF_DIR = "LIVY_CLIENT_CONF_DIR"
 
     def __init__(self, url, load_defaults=True, conf_dict=None):
+        self._load_defaults = load_defaults
+        self._conf_dict = conf_dict
         uri = urlparse(url)
         self._config = ConfigParser()
         self._load_config(load_defaults, conf_dict)
@@ -83,13 +84,14 @@ class HttpClient(object):
             self._set_uri(base)
             self._conn = _LivyConnection(base, self._verify_ssl)
             self._session_id = int(match.group(2))
-            self._reconnect_to_existing_session()
+            self._session_info = self._reconnect_to_existing_session().json()
         else:
             self._set_uri(uri)
             session_conf_dict = dict(self._config.items(self._CONFIG_SECTION))
             self._conn = _LivyConnection(uri, self._verify_ssl)
-            self._session_id = self._create_new_session(
-                session_conf_dict).json()['id']
+            self._session_info = self._create_new_session(
+                session_conf_dict).json()
+            self._session_id = self._session_info['id']
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._stopped = False
         self.lock = threading.Lock()
@@ -345,7 +347,32 @@ class HttpClient(object):
 
     @property
     def session_uri(self):
-        return self._conn._server_url_prefix + '/' + str(self._session_id)
+        return self._conn._server_url + '/sessions/' + str(self._session_id)
+
+    def get_sessions(self):
+        return self._conn.send_request('GET', '').json()
+
+    def get_session_info(self):
+        return self._conn.send_request('GET', '/{}'.format(self._session_id)).json()
+
+    def get_batches(self):
+        return client._conn.send_request('GET', '', prefix_url='/batches').json()
+
+    def get_client_for_session(self, session):
+        session = int(session)
+        if session == self._session_id:
+            return self
+        sessions = [s['id'] for s in self.get_sessions()['sessions']]
+        if session not in sessions:
+            raise ValueError("Sessions {} does not exit".format(session))
+        url = '/'.join(self.session_uri.strip('/').split('/')[:-1] + [str(session)])
+        return HttpClient(url=url, load_defaults=self._load_defaults, conf_dict=self._conf_dict)
+
+    def stop_other_sessions(self, shutdown_context):
+        sessions = [s['id'] for s in self.get_sessions()['sessions'] if s['id'] != self._session_id]
+        for session in sessions:
+            client = self.get_client_for_session(session)
+            client.stop(shutdown_context)
 
     def _set_uri(self, uri):
         if uri is not None and uri.scheme in ('http', 'https'):
@@ -399,7 +426,7 @@ class HttpClient(object):
 
     def _reconnect_to_existing_session(self):
         reconnect_uri = "/" + str(self._session_id) + "/connect"
-        self._conn.send_request('POST', reconnect_uri,
+        return self._conn.send_request('POST', reconnect_uri,
             headers=self._conn._JSON_HEADERS)
 
     def _send_job(self, command, job):
@@ -436,7 +463,6 @@ class HttpClient(object):
 
 class _LivyConnection(object):
 
-    _SESSIONS_URI = '/sessions'
     # Timeout in seconds
     _TIMEOUT = 10
     _JSON_HEADERS = {
@@ -445,7 +471,7 @@ class _LivyConnection(object):
     }
 
     def __init__(self, uri, verify_ssl=True):
-        self._server_url_prefix = uri.geturl() + self._SESSIONS_URI
+        self._server_url = uri.geturl()
         self._requests = requests
         self.lock = threading.Lock()
         self._verify_ssl = verify_ssl
@@ -456,7 +482,8 @@ class _LivyConnection(object):
         suffix_url,
         headers=None,
         files=None,
-        data=None
+        data=None,
+        prefix_url='/sessions'
     ):
         """
         Makes a HTTP request to the server for the given REST method and
@@ -493,7 +520,7 @@ class _LivyConnection(object):
                 local_headers = {'X-Requested-By': 'livy'}
                 if headers:
                     local_headers.update(headers)
-                request_url = self._server_url_prefix + suffix_url
+                request_url = self._server_url + prefix_url + suffix_url
                 return self._requests.request(method, request_url,
                     timeout=self._TIMEOUT, headers=local_headers, files=files,
                     json=data, verify=self._verify_ssl)
